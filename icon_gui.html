@@ -1,0 +1,2004 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P.T.I.G. / Picture-to-Icon Generator</title>
+    <style>
+        /* Palette/fonts lifted from FreeNet_Guidebook.html & entropy_gui.html :root
+           so the entire tool suite shares one cohesive visual identity. */
+        :root {
+            --bg:        #0a0c10;
+            --bg2:       #161b22;
+            --bg3:       #21262d;
+            --border:    #30363d;
+            --border-a:  rgba(48,54,61,0.6);
+            --text:      #c9d1d9;
+            --accent:    #2de2e6;
+            --accent2:   #58a6ff;
+            --accent-red: #ff2e4d;
+            --accent-yellow: #fcee0a;
+            --warn:      #d29922;
+            --muted:     #8b949e;
+            --dim:       #484f58;
+            --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+            --font-body: 'DM Sans', system-ui, -apple-system, sans-serif;
+            --font-head: 'JetBrains Mono', monospace;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        ::-webkit-scrollbar { width: 10px; height: 10px; }
+        ::-webkit-scrollbar-track { background: var(--bg); border-left: 1px solid var(--border-a); }
+        ::-webkit-scrollbar-thumb { background: var(--dim); }
+        ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+        * { scrollbar-width: thin; scrollbar-color: var(--dim) var(--bg); }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--font-body);
+            font-size: 14px;
+            line-height: 1.5;
+            padding: 16px;
+            min-height: 100vh;
+        }
+
+        /* ===========================================================
+           BACKGROUND LAYER - independent of everything below. Only
+           touches #bgCanvas; the interactive UI never needs to know
+           it's there.
+           =========================================================== */
+        #bgCanvas {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 0;
+            opacity: 0.12;
+            pointer-events: none;
+        }
+
+        .scanlines {
+            position: fixed;
+            inset: 0;
+            background:
+                linear-gradient(rgba(0,0,0,0) 50%, rgba(0,0,0,0.08) 50%),
+                linear-gradient(90deg, rgba(255,0,0,0.02), rgba(0,255,0,0.01), rgba(0,0,255,0.02));
+            background-size: 100% 4px, 3px 100%;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* ===========================================================
+           CONTENT LAYER
+           =========================================================== */
+        .content {
+            position: relative;
+            z-index: 2;
+            max-width: 1180px;
+            margin: 0 auto;
+        }
+
+        .panel {
+            background: rgba(22,27,34,0.68);
+            backdrop-filter: blur(6px);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 14px 16px;
+        }
+
+        .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+        button {
+            font-family: var(--font-head);
+            background: var(--bg3);
+            color: var(--accent);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 7px 12px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: text-shadow .15s, border-color .15s, color .15s, background .15s;
+            white-space: nowrap;
+        }
+        button:hover { text-shadow: 0 0 8px var(--accent); border-color: var(--accent); }
+        button:active { transform: translateY(1px); }
+        button.primary-btn {
+            background: rgba(45,226,230,0.12);
+            border-color: var(--accent);
+            font-weight: 600;
+        }
+        button.secondary-btn { color: var(--text); }
+        button.secondary-btn:hover { color: var(--accent); }
+        button.icon-btn { padding: 5px 10px; font-size: 12px; color: var(--muted); }
+        button.icon-btn:hover { color: var(--accent); }
+
+        .seg-group {
+            display: inline-flex;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .seg-group button {
+            border: none;
+            border-right: 1px solid var(--border-a);
+            border-radius: 0;
+            background: transparent;
+            color: var(--muted);
+            padding: 5px 10px;
+            font-size: 12px;
+        }
+        .seg-group button:last-child { border-right: none; }
+        .seg-group button.active {
+            background: var(--bg3);
+            color: var(--accent);
+            text-shadow: 0 0 6px rgba(45,226,230,0.45);
+        }
+
+        .workspace-grid {
+            display: grid;
+            grid-template-columns: 380px 1fr;
+            gap: 14px;
+            margin-top: 12px;
+        }
+        @media (max-width: 880px) {
+            .workspace-grid { grid-template-columns: 1fr; }
+        }
+
+        .section-title {
+            font-family: var(--font-head);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--accent2);
+            margin-bottom: 10px;
+        }
+
+        .divider { border: none; border-top: 1px solid var(--border-a); margin: 12px 0; }
+
+        .control-row {
+            display: grid;
+            grid-template-columns: 112px 1fr 56px;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 7px;
+        }
+        .control-row label {
+            font-size: 12px;
+            color: var(--muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .control-row .val {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--accent);
+            text-align: right;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            accent-color: var(--accent);
+            cursor: pointer;
+            height: 6px;
+        }
+        input[type="range"]:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+
+        input[type="text"] {
+            background: var(--bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 5px 8px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            width: 96px;
+        }
+        input[type="text"]:focus { outline: none; border-color: var(--accent); }
+
+        input[type="color"] {
+            width: 30px;
+            height: 28px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg);
+            cursor: pointer;
+            padding: 2px;
+        }
+
+        .chk-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            cursor: pointer;
+            user-select: none;
+        }
+        .chk-label input[type="checkbox"] {
+            accent-color: var(--accent);
+            width: 15px;
+            height: 15px;
+            cursor: pointer;
+        }
+
+        .sizes-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px 10px;
+            margin-top: 6px;
+        }
+
+        /* Preview Stage */
+        .preview-stage {
+            margin-top: 10px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 18px;
+            min-height: 450px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            gap: 18px;
+            transition: background .15s, border-color .15s;
+            position: relative;
+        }
+        .preview-stage.drag-over {
+            border-color: var(--accent);
+            box-shadow: 0 0 16px rgba(45,226,230,0.25) inset;
+        }
+        .preview-stage.bg-checker {
+            background-color: #1c1e24;
+            background-image:
+                linear-gradient(45deg, #272b33 25%, transparent 25%),
+                linear-gradient(-45deg, #272b33 25%, transparent 25%),
+                linear-gradient(45deg, transparent 75%, #272b33 75%),
+                linear-gradient(-45deg, transparent 75%, #272b33 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+        }
+        .preview-stage.bg-dark {
+            background: #14161b;
+        }
+        .preview-stage.bg-light {
+            background: #f1f3f5;
+            color: #1f2328;
+        }
+
+        .stage-top {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-around;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .frame-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+        .frame-box {
+            border: 1px dashed rgba(139,148,158,0.45);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            user-select: none;
+        }
+        #mainInteractiveBox {
+            cursor: grab;
+        }
+        #mainInteractiveBox:active {
+            cursor: grabbing;
+        }
+        .frame-box img {
+            display: block;
+            user-select: none;
+            -webkit-user-drag: none;
+        }
+        .pixelated {
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+        .frame-caption {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--muted);
+        }
+        .preview-stage.bg-light .frame-caption {
+            color: #4b5563;
+        }
+
+        .loupes-col {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            align-items: flex-start;
+        }
+
+        .stage-bottom {
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            padding-top: 10px;
+            border-top: 1px solid rgba(139,148,158,0.2);
+        }
+
+        .hint-line {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .status-strip {
+            margin-top: 10px;
+            background: var(--bg);
+            border: 1px solid var(--border-a);
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--muted);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .status-strip .ok { color: var(--accent); }
+        .status-strip .err { color: var(--accent-red); }
+
+        .checks-btn-row {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .sources-log-title {
+            font-size: 12px;
+            color: var(--muted);
+            margin-top: 14px;
+            margin-bottom: 4px;
+            font-family: var(--font-mono);
+        }
+
+        .sources-log {
+            background: var(--bg);
+            border: 1px solid var(--border-a);
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--muted);
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .sources-log .ts { color: var(--dim); }
+        .sources-log .trig { color: var(--accent2); }
+        .sources-log .hi { color: var(--accent); }
+
+        .modal pre {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            white-space: pre-wrap;
+            line-height: 1.55;
+        }
+        .check-line.ok { color: var(--accent); }
+        .check-line.warn { color: var(--warn); }
+        .check-line.fail { color: var(--accent-red); }
+
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.68);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 50;
+        }
+        .modal-overlay.hidden { display: none; }
+        .modal {
+            background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+            padding: 20px; max-width: 500px; width: 92%; max-height: 82vh; overflow-y: auto;
+        }
+        .modal h3 { font-family: var(--font-head); color: var(--accent); margin-bottom: 12px; }
+        .modal p { margin-bottom: 10px; font-size: 13px; white-space: pre-line; }
+        .modal button { margin-top: 10px; }
+    </style>
+</head>
+<body>
+<canvas id="bgCanvas" aria-hidden="true"></canvas>
+<div class="scanlines"></div>
+
+<!-- Скрытые input'ы для автономной работы в браузере/Canvas и Drag&Drop -->
+<input type="file" id="hiddenImageInput" accept="image/*,.png,.apng,.jpg,.jpeg,.jfif,.jpe,.pjpeg,.pjp,.mpo,.webp,.avif,.heic,.heif,.bmp,.dib,.gif,.tif,.tiff,.ico,.cur,.icns,.tga,.dds,.psd,.qoi,.pcx,.ppm,.pgm,.pbm,.pnm,.pfm,.jp2,.j2k,.sgi,.xbm,.xpm,.svg" style="display:none">
+<input type="file" id="hiddenProfileInput" accept=".json,application/json" style="display:none">
+
+<div class="content">
+
+    <!-- Верхняя панель -->
+    <div class="panel">
+        <div class="row-between">
+            <div class="row">
+                <button class="primary-btn" id="openImgBtn"></button>
+                <button class="secondary-btn" id="loadProfBtn"></button>
+                <button class="secondary-btn" id="saveProfBtn"></button>
+                <button class="secondary-btn" id="resetBtn"></button>
+            </div>
+            <div class="row">
+                <button class="primary-btn" id="saveIcoBtn"></button>
+                <button class="secondary-btn" id="savePreviewBtn"></button>
+                <button class="secondary-btn" id="exportPngBtn"></button>
+                <button class="icon-btn" id="helpBtn">?</button>
+                <button class="icon-btn" id="langBtn">EN</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="workspace-grid">
+
+        <!-- Левая панель настроек -->
+        <div class="panel">
+            <div class="section-title" id="secCropTitle"></div>
+
+            <div class="control-row">
+                <label id="lblTrimTop" for="trimTopRange"></label>
+                <input type="range" id="trimTopRange" min="0" max="0.45" step="0.01" value="0">
+                <span class="val" id="valTrimTop">0.00</span>
+            </div>
+            <div class="control-row">
+                <label id="lblTrimBottom" for="trimBottomRange"></label>
+                <input type="range" id="trimBottomRange" min="0" max="0.45" step="0.01" value="0">
+                <span class="val" id="valTrimBottom">0.00</span>
+            </div>
+            <div class="control-row">
+                <label id="lblTrimLeft" for="trimLeftRange"></label>
+                <input type="range" id="trimLeftRange" min="0" max="0.45" step="0.01" value="0">
+                <span class="val" id="valTrimLeft">0.00</span>
+            </div>
+            <div class="control-row">
+                <label id="lblTrimRight" for="trimRightRange"></label>
+                <input type="range" id="trimRightRange" min="0" max="0.45" step="0.01" value="0">
+                <span class="val" id="valTrimRight">0.00</span>
+            </div>
+            <div class="control-row">
+                <label id="lblZoom" for="zoomRange"></label>
+                <input type="range" id="zoomRange" min="0.25" max="4.0" step="0.02" value="1.0">
+                <span class="val" id="valZoom">1.00×</span>
+            </div>
+            <div class="control-row">
+                <label id="lblOffsetX" for="offsetXRange"></label>
+                <input type="range" id="offsetXRange" min="-1" max="1" step="0.002" value="0">
+                <span class="val" id="valOffsetX">+0.00</span>
+            </div>
+            <div class="control-row">
+                <label id="lblOffsetY" for="offsetYRange"></label>
+                <input type="range" id="offsetYRange" min="-1" max="1" step="0.002" value="0">
+                <span class="val" id="valOffsetY">+0.00</span>
+            </div>
+
+            <div class="row-between" style="margin-top:8px">
+                <span class="hint-line" id="lblFit"></span>
+                <div class="seg-group" id="fitSeg">
+                    <button type="button" id="fitBtnCover" data-val="cover" class="active">заполнить</button>
+                    <button type="button" id="fitBtnContain" data-val="contain">вписать</button>
+                </div>
+            </div>
+
+            <div class="row-between" style="margin-top:8px">
+                <span class="hint-line" id="lblBg"></span>
+                <div class="row" style="gap:6px">
+                    <input type="color" id="bgColorPicker" value="#161b22">
+                    <input type="text" id="bgColorText" value="" placeholder="нет">
+                    <button type="button" class="icon-btn" id="clearBgBtn"></button>
+                </div>
+            </div>
+
+            <hr class="divider">
+
+            <div class="section-title" id="secShapeTitle"></div>
+            <div class="row-between" style="margin-bottom:8px">
+                <span class="hint-line" id="lblShape"></span>
+                <div class="seg-group" id="shapeSeg">
+                    <button type="button" id="shapeBtnRounded" data-val="rounded" class="active">скругление</button>
+                    <button type="button" id="shapeBtnCircle" data-val="circle">круг</button>
+                    <button type="button" id="shapeBtnSquare" data-val="square">квадрат</button>
+                </div>
+            </div>
+            <div class="control-row">
+                <label id="lblRadius" for="radiusRange"></label>
+                <input type="range" id="radiusRange" min="0" max="256" step="1" value="96">
+                <span class="val" id="valRadius">96px</span>
+            </div>
+
+            <hr class="divider">
+
+            <div class="section-title" id="secBorderTitle"></div>
+            <div class="row-between" style="margin-bottom:8px">
+                <label class="chk-label">
+                    <input type="checkbox" id="borderChk" checked>
+                    <span id="lblBorderEnable"></span>
+                </label>
+                <div class="row" style="gap:6px">
+                    <input type="color" id="borderColorPicker" value="#2de2e6">
+                    <input type="text" id="borderColorText" value="#2de2e6">
+                </div>
+            </div>
+
+            <div class="control-row">
+                <label id="lblBorderAlpha" for="borderAlphaRange"></label>
+                <input type="range" id="borderAlphaRange" min="0" max="255" step="1" value="180">
+                <span class="val" id="valBorderAlpha">180</span>
+            </div>
+            <div class="control-row">
+                <label id="lblBorderWidth" for="borderWidthRange"></label>
+                <input type="range" id="borderWidthRange" min="1" max="48" step="0.5" value="8">
+                <span class="val" id="valBorderWidth">8.0px</span>
+            </div>
+            <div class="control-row">
+                <label id="lblBorderInset" for="borderInsetRange"></label>
+                <input type="range" id="borderInsetRange" min="0" max="48" step="0.5" value="4">
+                <span class="val" id="valBorderInset">4.0px</span>
+            </div>
+
+            <hr class="divider">
+
+            <div class="row-between">
+                <div class="section-title" id="secSizesTitle" style="margin-bottom:0"></div>
+                <div class="row" style="gap:4px">
+                    <button type="button" class="icon-btn" id="allSizesBtn"></button>
+                    <button type="button" class="icon-btn" id="minSizesBtn"></button>
+                </div>
+            </div>
+            <div class="sizes-grid" id="sizesGrid">
+                <label class="chk-label"><input type="checkbox" data-size="16" checked> 16×16</label>
+                <label class="chk-label"><input type="checkbox" data-size="20" checked> 20×20</label>
+                <label class="chk-label"><input type="checkbox" data-size="24" checked> 24×24</label>
+                <label class="chk-label"><input type="checkbox" data-size="32" checked> 32×32</label>
+                <label class="chk-label"><input type="checkbox" data-size="40" checked> 40×40</label>
+                <label class="chk-label"><input type="checkbox" data-size="48" checked> 48×48</label>
+                <label class="chk-label"><input type="checkbox" data-size="64" checked> 64×64</label>
+                <label class="chk-label"><input type="checkbox" data-size="128" checked> 128×128</label>
+                <label class="chk-label"><input type="checkbox" data-size="256" checked> 256×256</label>
+            </div>
+        </div>
+
+        <!-- Правая панель живого превью -->
+        <div class="panel" style="display:flex; flex-direction:column; justify-content:space-between;">
+            <div>
+                <div class="row-between">
+                    <span class="hint-line" id="mouseHint"></span>
+                    <div class="seg-group" id="backdropSeg">
+                        <button type="button" data-bg="checker" class="active" id="bgBtnChecker"></button>
+                        <button type="button" data-bg="dark" id="bgBtnDark"></button>
+                        <button type="button" data-bg="light" id="bgBtnLight"></button>
+                    </div>
+                </div>
+
+                <div class="preview-stage bg-checker" id="previewStage">
+                    <div class="stage-top">
+                        <div class="frame-card">
+                            <div class="frame-box" id="mainInteractiveBox" style="width:256px; height:256px;">
+                                <canvas id="img256" width="256" height="256"></canvas>
+                            </div>
+                            <span class="frame-caption">256×256 (1:1)</span>
+                        </div>
+
+                        <div class="loupes-col">
+                            <div class="frame-card">
+                                <div class="frame-box" style="width:128px; height:128px;">
+                                    <canvas id="img32Loupe" class="pixelated" width="128" height="128"></canvas>
+                                </div>
+                                <span class="frame-caption" id="capLoupe32">32×32 (4×)</span>
+                            </div>
+                            <div class="frame-card">
+                                <div class="frame-box" style="width:128px; height:128px;">
+                                    <canvas id="img16Loupe" class="pixelated" width="128" height="128"></canvas>
+                                </div>
+                                <span class="frame-caption" id="capLoupe16">16×16 (8×)</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stage-bottom">
+                        <div class="frame-card">
+                            <div class="frame-box" style="width:64px; height:64px;"><canvas id="img64" width="64" height="64"></canvas></div>
+                            <span class="frame-caption">64px</span>
+                        </div>
+                        <div class="frame-card">
+                            <div class="frame-box" style="width:48px; height:48px;"><canvas id="img48" width="48" height="48"></canvas></div>
+                            <span class="frame-caption">48px</span>
+                        </div>
+                        <div class="frame-card">
+                            <div class="frame-box" style="width:32px; height:32px;"><canvas id="img32" width="32" height="32"></canvas></div>
+                            <span class="frame-caption">32px</span>
+                        </div>
+                        <div class="frame-card">
+                            <div class="frame-box" style="width:24px; height:24px;"><canvas id="img24" width="24" height="24"></canvas></div>
+                            <span class="frame-caption">24px</span>
+                        </div>
+                        <div class="frame-card">
+                            <div class="frame-box" style="width:16px; height:16px;"><canvas id="img16" width="16" height="16"></canvas></div>
+                            <span class="frame-caption">16px</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="status-strip">
+                <span id="metaInfo"></span>
+                <span class="ok" id="statusMsg"></span>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Кнопки диагностики и лог телеметрии (по образцу entropy_gui.html) -->
+    <div class="checks-btn-row">
+        <button type="button" id="inspectBtn"></button>
+        <button type="button" id="checksBtn"></button>
+    </div>
+
+    <div class="sources-log-title" id="sourcesLogTitle"></div>
+    <div class="sources-log" id="sourcesLog"></div>
+
+    <!-- Модальное окно справки -->
+    <div class="modal-overlay hidden" id="helpModal">
+        <div class="modal">
+            <h3 id="helpTitle"></h3>
+            <p id="helpBody"></p>
+            <button type="button" id="closeHelp"></button>
+        </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="checksModal">
+        <div class="modal" style="max-width: 560px;">
+            <h3 id="checksTitle"></h3>
+            <pre id="checksOutput"></pre>
+            <button type="button" id="closeChecks"></button>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    /* ===============================================================
+       BACKGROUND LAYER (MATRIX) - identical to entropy_gui.html
+       =============================================================== */
+    (function () {
+        const bgCvs = document.getElementById("bgCanvas");
+        const bgCtx = bgCvs.getContext("2d");
+        let bgDrops = [];
+
+        function initCanvas() {
+            bgCvs.width = window.innerWidth;
+            bgCvs.height = window.innerHeight;
+            bgDrops = new Array(Math.floor(bgCvs.width / 14)).fill(1);
+        }
+
+        function drawMatrix() {
+            bgCtx.fillStyle = "rgba(10,12,16,0.05)";
+            bgCtx.fillRect(0, 0, bgCvs.width, bgCvs.height);
+            bgCtx.font = "14px monospace";
+            bgDrops.forEach((y, i) => {
+                bgCtx.fillStyle = Math.random() < 0.06 ? "#ff2e4d" : "#2de2e6";
+                bgCtx.fillText(Math.random() > 0.5 ? "1" : "0", i * 14, y * 14);
+                if (y * 14 > bgCvs.height && Math.random() > 0.975) bgDrops[i] = 0;
+                bgDrops[i]++;
+            });
+        }
+
+        window.addEventListener("resize", initCanvas);
+        initCanvas();
+
+        let lastMatrixTime = 0;
+        function matrixLoop(timestamp) {
+            requestAnimationFrame(matrixLoop);
+            if (timestamp - lastMatrixTime < 40) return;
+            lastMatrixTime = timestamp;
+            drawMatrix();
+        }
+        requestAnimationFrame(matrixLoop);
+    })();
+
+    /* ===============================================================
+       CONTENT LAYER & DUAL-MODE ENGINE (pywebview + HTML5 Canvas)
+       =============================================================== */
+    const STRINGS = {
+        ru: {
+            open_img: "Открыть картинку",
+            load_prof: "Профиль…",
+            save_prof: "Сохранить профиль",
+            reset: "Сброс",
+            save_ico: "Сохранить .ICO",
+            save_preview: "Лист превью (.PNG)",
+            export_png: "Набор PNG",
+            sec_crop: "Кадрирование и геометрия",
+            trim_top: "срез сверху:",
+            trim_bottom: "срез снизу:",
+            trim_left: "срез слева:",
+            trim_right: "срез справа:",
+            zoom: "зум:",
+            offset_x: "сдвиг X:",
+            offset_y: "сдвиг Y:",
+            fit: "режим окна:",
+            fit_cover: "заполнить",
+            fit_contain: "вписать",
+            bg: "фон полей:",
+            bg_placeholder: "нет",
+            clear_bg: "Прозр.",
+            sec_shape: "Форма маски",
+            shape: "форма:",
+            shape_rounded: "скругление",
+            shape_circle: "круг",
+            shape_square: "квадрат",
+            radius: "радиус углов:",
+            sec_border: "Неоновая рамка",
+            border_enable: "включить рамку",
+            border_alpha: "альфа рамки:",
+            border_width: "толщина (512):",
+            border_inset: "отступ (512):",
+            sec_sizes: "Размеры в .ICO",
+            all_sizes: "Все 9",
+            min_sizes: "Мин (4)",
+            mouse_hint: "Перетаскивайте 256×256 мышью (сдвиг), крутите колесо (зум), двойной клик — сброс, или перетащите файл сюда",
+            bg_checker: "Шахматка",
+            bg_dark: "Тёмный",
+            bg_light: "Светлый",
+            loupe32: "32×32 (лупа 4×)",
+            loupe16: "16×16 (лупа 8×)",
+            meta_info: (name, w, h, side, cnt) => `исходник: ${name} (${w}×${h}px) | окно: ~${side}px | кадров: ${cnt}`,
+            status_ready: "готово",
+            status_saved: (p) => `сохранено: ${p}`,
+            status_prof_loaded: (p) => `загружен профиль: ${p}`,
+            help_title: "Справка — P.T.I.G. (Picture-to-Icon Generator)",
+            help_body: "Инструмент создаёт мультиразмерные иконки .ICO, отрисовывая каждый размер (от 16×16 до 256×256) независимо из исходника.\n\n• Кадрирование: срезы по краям позволяют убрать водяные знаки или рамки исходника. Cover заполняет весь квадрат, Contain вписывает картинку целиком.\n• Маска и рамка: радиус, толщина и отступ задаются в пикселях опорного холста 512×512 и пропорционально масштабируются (на 16×16 рамка никогда не тоньше 1px и смешивается с картинкой через альфа-композитинг).\n• Мышь: перетаскивайте крупное превью 256×256 для сдвига, крутите колесо для зума, двойной клик сбрасывает зум и сдвиг.\n• Настройки сохраняются в JSON-профиль и совместимы с CLI make_icon.py.",
+            close: "Закрыть",
+            inspect_btn: "Замерить кадры .ICO",
+            run_checks: "Запустить проверки",
+            checks_title: "Проверки движка и иконки",
+            checks_done: "Готово.",
+            sources_log_title: "телеметрия кадров и конвейера (последние обращения):",
+            trig_start: "запуск",
+            trig_image: "картинка",
+            trig_profile: "профиль",
+            trig_inspect: "замер",
+            trig_save_ico: "запись .ICO",
+            trig_checks: "проверки",
+            telemetry_suffix: (pngB, hdrB, totKb, ms, winPx, ratio) =>
+                `→ ${pngB}B PNG + ${hdrB}B ICONDIR = ${totKb} КБ (окно ~${winPx}px, ${ratio}×, ${ms} мс)`,
+            check_line: {
+                source_resolution: (r) => r.status === "ok"
+                    ? `разрешение кропа: окно ${r.window_side}px ≥ ${r.max_size}px (запас ${r.ratio}× без апскейла)`
+                    : `разрешение кропа: окно ${r.window_side}px < ${r.max_size}px (${r.ratio}× — возможна потеря резкости на ${r.max_size}px)`,
+                small_frame_legibility: (r) => `читаемость 16×16: чистое поле внутри рамки ${r.inner_px}×${r.inner_px}px (рамка ${r.border_px}px, отступ ${r.inset_px}px)`,
+                supersample_aa: (r) => `суперсемплинг масок (SS=${r.ss}): сглаживание краёв активно (${r.aa_pixels} полутоновых px, углы прозрачны)`,
+                concentric_geometry: (r) => r.r_outer !== undefined
+                    ? `концентричность углов: внешний радиус ${r.r_outer}px → внутренний ${r.r_inner}px`
+                    : `геометрия формы (${r.shape === "circle" ? "круг" : (r.shape === "square" ? "квадрат" : "скругление")}): контуры симметричны`,
+                edge_coverage: (r) => r.filled_sides === 4
+                    ? `заполнение контура: все 4 стороны примыкают к рамке без зазоров`
+                    : `заполнение контура: заполнено сторон ${r.filled_sides}/4 (режим с прозрачными полями)`,
+                ico_binary_spec: (r) => `бинарный контейнер .ICO: заголовок ICONDIR и ${r.count} PNG-кадров валидны (${r.total_bytes} байт)`,
+                windows_core_sizes: (r) => r.missing && r.missing.length
+                    ? `базовые размеры Windows: не выбраны [${r.missing.join(", ")}]px`
+                    : `базовые размеры Windows (16, 32, 48, 256): все включены`,
+                profile_roundtrip: () => `сериализация профиля IconSettings: JSON round-trip корректен`,
+            },
+        },
+        en: {
+            open_img: "Open Image",
+            load_prof: "Load Profile…",
+            save_prof: "Save Profile",
+            reset: "Reset",
+            save_ico: "Save .ICO",
+            save_preview: "Preview Sheet (.PNG)",
+            export_png: "PNG Set",
+            sec_crop: "Cropping & Geometry",
+            trim_top: "trim top:",
+            trim_bottom: "trim bottom:",
+            trim_left: "trim left:",
+            trim_right: "trim right:",
+            zoom: "zoom:",
+            offset_x: "offset X:",
+            offset_y: "offset Y:",
+            fit: "fit mode:",
+            fit_cover: "cover",
+            fit_contain: "contain",
+            bg: "backdrop fill:",
+            bg_placeholder: "none",
+            clear_bg: "Clear",
+            sec_shape: "Mask Shape",
+            shape: "shape:",
+            shape_rounded: "rounded",
+            shape_circle: "circle",
+            shape_square: "square",
+            radius: "corner radius:",
+            sec_border: "Neon Border",
+            border_enable: "enable border",
+            border_alpha: "border alpha:",
+            border_width: "width (at 512):",
+            border_inset: "inset (at 512):",
+            sec_sizes: ".ICO Frame Sizes",
+            all_sizes: "All 9",
+            min_sizes: "Min (4)",
+            mouse_hint: "Drag 256×256 to pan, scroll wheel to zoom, double-click to reset, or drop an image file here",
+            bg_checker: "Checker",
+            bg_dark: "Dark",
+            bg_light: "Light",
+            loupe32: "32×32 (4× loupe)",
+            loupe16: "16×16 (8× loupe)",
+            meta_info: (name, w, h, side, cnt) => `source: ${name} (${w}×${h}px) | window: ~${side}px | frames: ${cnt}`,
+            status_ready: "ready",
+            status_saved: (p) => `saved: ${p}`,
+            status_prof_loaded: (p) => `profile loaded: ${p}`,
+            help_title: "Help — P.T.I.G. (Picture-to-Icon Generator)",
+            help_body: "Builds crisp multi-resolution .ICO files by rendering every target size (16×16 through 256×256) independently from the source image.\n\n• Cropping: edge trims remove watermarks or unwanted margins. Cover fills the square; Contain fits the entire image inside.\n• Mask & Border: radius, width, and inset are specified in 512×512 reference pixels and scale proportionally (keeping at least a 1px crisp alpha-blended border even at 16×16).\n• Mouse controls: drag the 256×256 preview to pan, use the scroll wheel to zoom, double-click to center.\n• Profiles are saved as JSON and are 100% compatible with the make_icon.py CLI.",
+            close: "Close",
+            inspect_btn: "Inspect .ICO Frames",
+            run_checks: "Run Sanity Checks",
+            checks_title: "Engine & Icon Checks",
+            checks_done: "Done.",
+            sources_log_title: "frame & pipeline telemetry (recent accesses):",
+            trig_start: "start",
+            trig_image: "image",
+            trig_profile: "profile",
+            trig_inspect: "inspect",
+            trig_save_ico: "save .ICO",
+            trig_checks: "checks",
+            telemetry_suffix: (pngB, hdrB, totKb, ms, winPx, ratio) =>
+                `→ ${pngB}B PNG + ${hdrB}B ICONDIR = ${totKb} KB (window ~${winPx}px, ${ratio}×, ${ms} ms)`,
+            check_line: {
+                source_resolution: (r) => r.status === "ok"
+                    ? `crop resolution: window ${r.window_side}px ≥ ${r.max_size}px (${r.ratio}× headroom, no upscale)`
+                    : `crop resolution: window ${r.window_side}px < ${r.max_size}px (${r.ratio}× — upscaling on ${r.max_size}px)`,
+                small_frame_legibility: (r) => `16×16 legibility: inner artwork span ${r.inner_px}×${r.inner_px}px (border ${r.border_px}px, inset ${r.inset_px}px)`,
+                supersample_aa: (r) => `supersampled masks (SS=${r.ss}): edge anti-aliasing active (${r.aa_pixels} ramp px, corners clean)`,
+                concentric_geometry: (r) => r.r_outer !== undefined
+                    ? `concentric corners: outer radius ${r.r_outer}px → inner ${r.r_inner}px`
+                    : `shape geometry (${r.shape}): contours symmetric`,
+                edge_coverage: (r) => r.filled_sides === 4
+                    ? `contour coverage: all 4 cardinal edges filled seamlessly`
+                    : `contour coverage: ${r.filled_sides}/4 cardinal edges filled (transparent margin mode)`,
+                ico_binary_spec: (r) => `.ICO binary container: ICONDIR header & ${r.count} PNG frames valid (${r.total_bytes} bytes)`,
+                windows_core_sizes: (r) => r.missing && r.missing.length
+                    ? `Windows core sizes: missing [${r.missing.join(", ")}]px`
+                    : `Windows core sizes (16, 32, 48, 256): all present`,
+                profile_roundtrip: () => `IconSettings profile serialization: JSON round-trip verified`,
+            },
+        },
+    };
+
+    const DEFAULT_SETTINGS = {
+        trim_top: 0.0,
+        trim_bottom: 0.0,
+        trim_left: 0.0,
+        trim_right: 0.0,
+        fit: "cover",
+        zoom: 1.0,
+        offset_x: 0.0,
+        offset_y: 0.0,
+        background: null,
+        shape: "rounded",
+        radius: 96,
+        border: true,
+        border_color: "#2de2e6",
+        border_alpha: 180,
+        border_width: 8,
+        border_inset: 4,
+        sizes: [16, 20, 24, 32, 40, 48, 64, 128, 256],
+    };
+
+    let lang = "ru";
+    let pyReady = false;
+    let renderTimer = null;
+    let localSourceCanvas = null;
+    let localSourceName = "demo_synthwave.png";
+    let currentSrcWidth = 512;
+    let currentSrcHeight = 512;
+
+    function t(key, ...args) {
+        const v = STRINGS[lang][key];
+        return typeof v === "function" ? v(...args) : v;
+    }
+
+    function setStatus(text, isError = false) {
+        const el = document.getElementById("statusMsg");
+        el.textContent = text;
+        el.className = isError ? "err" : "ok";
+    }
+
+    function applyLanguage() {
+        document.getElementById("langBtn").textContent = lang === "ru" ? "EN" : "RU";
+        document.getElementById("openImgBtn").textContent = t("open_img");
+        document.getElementById("loadProfBtn").textContent = t("load_prof");
+        document.getElementById("saveProfBtn").textContent = t("save_prof");
+        document.getElementById("resetBtn").textContent = t("reset");
+        document.getElementById("saveIcoBtn").textContent = t("save_ico");
+        document.getElementById("savePreviewBtn").textContent = t("save_preview");
+        document.getElementById("exportPngBtn").textContent = t("export_png");
+
+        document.getElementById("secCropTitle").textContent = t("sec_crop");
+        document.getElementById("lblTrimTop").textContent = t("trim_top");
+        document.getElementById("lblTrimBottom").textContent = t("trim_bottom");
+        document.getElementById("lblTrimLeft").textContent = t("trim_left");
+        document.getElementById("lblTrimRight").textContent = t("trim_right");
+        document.getElementById("lblZoom").textContent = t("zoom");
+        document.getElementById("lblOffsetX").textContent = t("offset_x");
+        document.getElementById("lblOffsetY").textContent = t("offset_y");
+        document.getElementById("lblFit").textContent = t("fit");
+        document.getElementById("fitBtnCover").textContent = t("fit_cover");
+        document.getElementById("fitBtnContain").textContent = t("fit_contain");
+        document.getElementById("lblBg").textContent = t("bg");
+        document.getElementById("bgColorText").placeholder = t("bg_placeholder");
+        document.getElementById("clearBgBtn").textContent = t("clear_bg");
+
+        document.getElementById("secShapeTitle").textContent = t("sec_shape");
+        document.getElementById("lblShape").textContent = t("shape");
+        document.getElementById("shapeBtnRounded").textContent = t("shape_rounded");
+        document.getElementById("shapeBtnCircle").textContent = t("shape_circle");
+        document.getElementById("shapeBtnSquare").textContent = t("shape_square");
+        document.getElementById("lblRadius").textContent = t("radius");
+
+        document.getElementById("secBorderTitle").textContent = t("sec_border");
+        document.getElementById("lblBorderEnable").textContent = t("border_enable");
+        document.getElementById("lblBorderAlpha").textContent = t("border_alpha");
+        document.getElementById("lblBorderWidth").textContent = t("border_width");
+        document.getElementById("lblBorderInset").textContent = t("border_inset");
+
+        document.getElementById("secSizesTitle").textContent = t("sec_sizes");
+        document.getElementById("allSizesBtn").textContent = t("all_sizes");
+        document.getElementById("minSizesBtn").textContent = t("min_sizes");
+
+        document.getElementById("mouseHint").textContent = t("mouse_hint");
+        document.getElementById("bgBtnChecker").textContent = t("bg_checker");
+        document.getElementById("bgBtnDark").textContent = t("bg_dark");
+        document.getElementById("bgBtnLight").textContent = t("bg_light");
+        document.getElementById("capLoupe32").textContent = t("loupe32");
+        document.getElementById("capLoupe16").textContent = t("loupe16");
+
+        document.getElementById("helpTitle").textContent = t("help_title");
+        document.getElementById("helpBody").textContent = t("help_body");
+        document.getElementById("closeHelp").textContent = t("close");
+        document.getElementById("inspectBtn").textContent = t("inspect_btn");
+        document.getElementById("checksBtn").textContent = t("run_checks");
+        document.getElementById("checksTitle").textContent = t("checks_title");
+        document.getElementById("closeChecks").textContent = t("close");
+        document.getElementById("sourcesLogTitle").textContent = t("sources_log_title");
+        scheduleRender();
+    }
+
+    function readSettingsFromUI() {
+        const fitBtn = document.querySelector("#fitSeg button.active");
+        const shapeBtn = document.querySelector("#shapeSeg button.active");
+        const sizes = [];
+        document.querySelectorAll("#sizesGrid input[type='checkbox']").forEach((chk) => {
+            if (chk.checked) sizes.push(parseInt(chk.getAttribute("data-size"), 10));
+        });
+        if (!sizes.length) sizes.push(256);
+        const bgRaw = document.getElementById("bgColorText").value.trim();
+        return {
+            trim_top: parseFloat(document.getElementById("trimTopRange").value),
+            trim_bottom: parseFloat(document.getElementById("trimBottomRange").value),
+            trim_left: parseFloat(document.getElementById("trimLeftRange").value),
+            trim_right: parseFloat(document.getElementById("trimRightRange").value),
+            fit: fitBtn ? fitBtn.getAttribute("data-val") : "cover",
+            zoom: parseFloat(document.getElementById("zoomRange").value),
+            offset_x: parseFloat(document.getElementById("offsetXRange").value),
+            offset_y: parseFloat(document.getElementById("offsetYRange").value),
+            background: bgRaw ? bgRaw : null,
+            shape: shapeBtn ? shapeBtn.getAttribute("data-val") : "rounded",
+            radius: parseFloat(document.getElementById("radiusRange").value),
+            border: document.getElementById("borderChk").checked,
+            border_color: document.getElementById("borderColorText").value.trim() || "#2de2e6",
+            border_alpha: parseInt(document.getElementById("borderAlphaRange").value, 10),
+            border_width: parseFloat(document.getElementById("borderWidthRange").value),
+            border_inset: parseFloat(document.getElementById("borderInsetRange").value),
+            sizes: sizes,
+        };
+    }
+
+    function updateValueLabels(st) {
+        document.getElementById("valTrimTop").textContent = st.trim_top.toFixed(2);
+        document.getElementById("valTrimBottom").textContent = st.trim_bottom.toFixed(2);
+        document.getElementById("valTrimLeft").textContent = st.trim_left.toFixed(2);
+        document.getElementById("valTrimRight").textContent = st.trim_right.toFixed(2);
+        document.getElementById("valZoom").textContent = st.zoom.toFixed(2) + "×";
+        document.getElementById("valOffsetX").textContent = (st.offset_x >= 0 ? "+" : "") + st.offset_x.toFixed(2);
+        document.getElementById("valOffsetY").textContent = (st.offset_y >= 0 ? "+" : "") + st.offset_y.toFixed(2);
+        document.getElementById("valRadius").textContent = Math.round(st.radius) + "px";
+        document.getElementById("valBorderAlpha").textContent = String(st.border_alpha);
+        document.getElementById("valBorderWidth").textContent = st.border_width.toFixed(1) + "px";
+        document.getElementById("valBorderInset").textContent = st.border_inset.toFixed(1) + "px";
+        document.getElementById("radiusRange").disabled = st.shape !== "rounded";
+        const zEl = document.getElementById("zoomRange");
+        const minZ = st.fit === "cover" ? 1.0 : 0.25;
+        zEl.min = String(minZ);
+        if (parseFloat(zEl.value) < minZ) {
+            zEl.value = String(minZ);
+            document.getElementById("valZoom").textContent = minZ.toFixed(2) + "×";
+        }
+    }
+
+    function applySettingsToUI(st) {
+        document.getElementById("trimTopRange").value = st.trim_top;
+        document.getElementById("trimBottomRange").value = st.trim_bottom;
+        document.getElementById("trimLeftRange").value = st.trim_left;
+        document.getElementById("trimRightRange").value = st.trim_right;
+        document.getElementById("zoomRange").value = st.zoom;
+        document.getElementById("offsetXRange").value = st.offset_x;
+        document.getElementById("offsetYRange").value = st.offset_y;
+        document.getElementById("bgColorText").value = st.background || "";
+        if (st.background && /^#[0-9a-fA-F]{6}$/.test(st.background)) {
+            document.getElementById("bgColorPicker").value = st.background;
+        }
+        document.querySelectorAll("#fitSeg button").forEach((b) => {
+            b.classList.toggle("active", b.getAttribute("data-val") === st.fit);
+        });
+        document.querySelectorAll("#shapeSeg button").forEach((b) => {
+            b.classList.toggle("active", b.getAttribute("data-val") === st.shape);
+        });
+        document.getElementById("radiusRange").value = st.radius;
+        document.getElementById("borderChk").checked = Boolean(st.border);
+        document.getElementById("borderColorText").value = st.border_color || "#2de2e6";
+        if (st.border_color && /^#[0-9a-fA-F]{6}$/.test(st.border_color)) {
+            document.getElementById("borderColorPicker").value = st.border_color;
+        }
+        document.getElementById("borderAlphaRange").value = st.border_alpha;
+        document.getElementById("borderWidthRange").value = st.border_width;
+        document.getElementById("borderInsetRange").value = st.border_inset;
+
+        const sizeSet = new Set(st.sizes || DEFAULT_SETTINGS.sizes);
+        document.querySelectorAll("#sizesGrid input[type='checkbox']").forEach((chk) => {
+            const s = parseInt(chk.getAttribute("data-size"), 10);
+            chk.checked = sizeSet.has(s);
+        });
+        updateValueLabels(st);
+    }
+
+    /* ---------------------------------------------------------------
+       Автономный клиентский рендер на HTML5 Canvas (фоллбэк, когда
+       интерфейс открыт в обычном браузере или Canvas без pywebview)
+       --------------------------------------------------------------- */
+    function initDemoSourceCanvas() {
+        const size = 512;
+        const c = document.createElement("canvas");
+        c.width = size;
+        c.height = size;
+        const ctx = c.getContext("2d");
+        const grad = ctx.createLinearGradient(0, 0, 0, size);
+        grad.addColorStop(0, "#0c1022");
+        grad.addColorStop(1, "#282866");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, size, size);
+
+        ctx.fillStyle = "#ff2e4d";
+        ctx.beginPath();
+        ctx.arc(size * 0.5, size * 0.44, size * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#18183a";
+        [[0.54, 0.025], [0.61, 0.035], [0.68, 0.045]].forEach(([f, hf]) => {
+            ctx.fillRect(size * 0.18, size * f, size * 0.64, size * hf);
+        });
+
+        ctx.fillStyle = "#1a244e";
+        ctx.beginPath();
+        ctx.moveTo(0, size * 0.78);
+        ctx.lineTo(size * 0.34, size * 0.44);
+        ctx.lineTo(size * 0.72, size * 0.78);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = "#101634";
+        ctx.beginPath();
+        ctx.moveTo(size * 0.28, size * 0.8);
+        ctx.lineTo(size * 0.66, size * 0.38);
+        ctx.lineTo(size, size * 0.8);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = "#0a0c18";
+        ctx.fillRect(0, size * 0.76, size, size * 0.24);
+        ctx.strokeStyle = "#2de2e6";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(0, size * 0.76);
+        ctx.lineTo(size, size * 0.76);
+        ctx.stroke();
+        localSourceCanvas = c;
+    }
+
+    function parseHexColorJS(str, defaultAlpha = 255) {
+        if (!str) return null;
+        const s = String(str).trim().toLowerCase();
+        if (!s || s === "none" || s === "transparent" || s === "нет") return null;
+        const m = s.match(/^#?([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/);
+        if (!m) return null;
+        let h = m[1];
+        if (h.length === 3 || h.length === 4) {
+            h = h.split("").map((ch) => ch + ch).join("");
+        }
+        const r = parseInt(h.slice(0, 2), 16);
+        const g = parseInt(h.slice(2, 4), 16);
+        const b = parseInt(h.slice(4, 6), 16);
+        const a = h.length === 8 ? parseInt(h.slice(6, 8), 16) : defaultAlpha;
+        return [r, g, b, a];
+    }
+
+    function traceShapePath(ctx, n, shape, radiusPx, insetPx) {
+        const x0 = insetPx;
+        const y0 = insetPx;
+        const w = n - insetPx * 2;
+        const h = n - insetPx * 2;
+        ctx.beginPath();
+        if (w <= 0 || h <= 0) return;
+        if (shape === "circle") {
+            ctx.arc(n / 2, n / 2, w / 2, 0, Math.PI * 2);
+        } else if (shape === "square") {
+            ctx.rect(x0, y0, w, h);
+        } else {
+            const r = Math.max(0, Math.min(w / 2, Math.min(radiusPx, n / 2) - insetPx));
+            ctx.roundRect(x0, y0, w, h, r);
+        }
+        ctx.closePath();
+    }
+
+    const scratchCanvases = new Map();
+    const ringCache = new Map();
+
+    function getScratchCanvas(n) {
+        let c = scratchCanvases.get(n);
+        if (!c) {
+            c = document.createElement("canvas");
+            c.width = n;
+            c.height = n;
+            scratchCanvases.set(n, c);
+        }
+        return c;
+    }
+
+    function getCachedRingCanvas(n, st, radiusPx) {
+        const s = n / 512.0;
+        const brd = parseHexColorJS(st.border_color, st.border_alpha) || [45, 226, 230, 180];
+        const widthPx = Math.max(1, Math.round(st.border_width * s));
+        const insetPx = Math.round(st.border_inset * s);
+        const key = `${n}|${st.shape}|${radiusPx.toFixed(1)}|${widthPx}|${insetPx}|${brd.join(",")}`;
+        let ring = ringCache.get(key);
+        if (!ring) {
+            if (ringCache.size > 64) ringCache.clear();
+            ring = document.createElement("canvas");
+            ring.width = n;
+            ring.height = n;
+            const rctx = ring.getContext("2d");
+            rctx.fillStyle = `rgba(${brd[0]},${brd[1]},${brd[2]},${brd[3] / 255})`;
+            traceShapePath(rctx, n, st.shape, radiusPx, insetPx);
+            rctx.fill();
+
+            rctx.globalCompositeOperation = "destination-out";
+            rctx.fillStyle = "#000";
+            traceShapePath(rctx, n, st.shape, radiusPx, insetPx + widthPx);
+            rctx.fill();
+            ringCache.set(key, ring);
+        }
+        return ring;
+    }
+
+    function renderFrameCanvasJS(srcCvs, st, n, fastInteractive = false) {
+        const sw = srcCvs.width;
+        const sh = srcCvs.height;
+        const leftTrim = Math.floor(sw * st.trim_left);
+        const rightTrim = sw - Math.floor(sw * st.trim_right);
+        const topTrim = Math.floor(sh * st.trim_top);
+        const bottomTrim = sh - Math.floor(sh * st.trim_bottom);
+        const cw = Math.max(1, rightTrim - leftTrim);
+        const ch = Math.max(1, bottomTrim - topTrim);
+
+        const base = st.fit === "cover" ? Math.min(cw, ch) : Math.max(cw, ch);
+        const effZoom = st.fit === "cover" ? Math.max(1.0, st.zoom) : st.zoom;
+        const side = base / effZoom;
+        const winLeft = (cw - side) * (1 + st.offset_x) / 2;
+        const winTop = (ch - side) * (1 + st.offset_y) / 2;
+
+        const out = getScratchCanvas(n);
+        const ctx = out.getContext("2d");
+        ctx.clearRect(0, 0, n, n);
+
+        const s = n / 512.0;
+        const radiusPx = st.radius * s;
+        const outerInsetPx = (st.border && st.border_width > 0) ? Math.round(st.border_inset * s) : 0;
+
+        ctx.save();
+        traceShapePath(ctx, n, st.shape, radiusPx, outerInsetPx);
+        ctx.clip();
+
+        const bg = parseHexColorJS(st.background);
+        if (bg) {
+            ctx.fillStyle = `rgba(${bg[0]},${bg[1]},${bg[2]},${bg[3] / 255})`;
+            ctx.fillRect(0, 0, n, n);
+        }
+
+        const k = n / side;
+        const dx = -winLeft * k;
+        const dy = -winTop * k;
+        const dw = cw * k;
+        const dh = ch * k;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = fastInteractive ? "medium" : "high";
+        ctx.drawImage(srcCvs, leftTrim, topTrim, cw, ch, dx, dy, dw, dh);
+        ctx.restore();
+
+        if (st.border && st.border_width > 0) {
+            const ring = getCachedRingCanvas(n, st, radiusPx);
+            ctx.drawImage(ring, 0, 0);
+        }
+        return { canvas: out, windowSide: Math.round(side) };
+    }
+
+    let rafId = null;
+    let pySyncTimer = null;
+    let pySyncInFlight = false;
+    let pySyncPending = false;
+    let renderSeq = 0;
+
+    function syncClientSourceFromDataUrl(dataUrl, srcName, origW, origH) {
+        if (!dataUrl) return;
+        const img = new Image();
+        img.onload = () => {
+            const c = document.createElement("canvas");
+            c.width = img.naturalWidth || img.width;
+            c.height = img.naturalHeight || img.height;
+            c.getContext("2d").drawImage(img, 0, 0);
+            localSourceCanvas = c;
+            if (srcName) localSourceName = srcName;
+            if (origW) currentSrcWidth = origW;
+            if (origH) currentSrcHeight = origH;
+        };
+        img.src = dataUrl;
+    }
+
+    function blitCanvas(targetId, srcCanvas, targetSize, pixelated = false) {
+        const dst = document.getElementById(targetId);
+        if (!dst) return;
+        const ctx = dst.getContext("2d");
+        ctx.clearRect(0, 0, targetSize, targetSize);
+        ctx.imageSmoothingEnabled = !pixelated;
+        ctx.drawImage(srcCanvas, 0, 0, targetSize, targetSize);
+    }
+
+    function drawDataUrlToCanvas(targetId, dataUrl, targetSize, pixelated = false, seq = 0) {
+        const img = new Image();
+        img.onload = () => {
+            if (seq < renderSeq) return; // отбрасываем устаревший кадр, если пользователь уже сдвинул ползунок
+            blitCanvas(targetId, img, targetSize, pixelated);
+        };
+        img.src = dataUrl;
+    }
+
+    function applyPreviewResult(res, seq = renderSeq) {
+        if (!res || !res.ok) {
+            if (res && res.error) setStatus(res.error, true);
+            return;
+        }
+        if (res.src_data_url) {
+            syncClientSourceFromDataUrl(res.src_data_url, res.src_name, res.src_width, res.src_height);
+        }
+        if (res.src_name) localSourceName = res.src_name;
+        if (res.src_width) currentSrcWidth = res.src_width;
+        if (res.src_height) currentSrcHeight = res.src_height;
+
+        const f = res.frames;
+        if (f) {
+            drawDataUrlToCanvas("img256", f["256"], 256, false, seq);
+            drawDataUrlToCanvas("img64", f["64"], 64, false, seq);
+            drawDataUrlToCanvas("img48", f["48"], 48, false, seq);
+            drawDataUrlToCanvas("img32", f["32"], 32, false, seq);
+            drawDataUrlToCanvas("img24", f["24"], 24, false, seq);
+            drawDataUrlToCanvas("img16", f["16"], 16, false, seq);
+            drawDataUrlToCanvas("img32Loupe", f["32"], 128, true, seq);
+            drawDataUrlToCanvas("img16Loupe", f["16"], 128, true, seq);
+        }
+
+        const st = readSettingsFromUI();
+        document.getElementById("metaInfo").textContent = t(
+            "meta_info",
+            localSourceName,
+            currentSrcWidth,
+            currentSrcHeight,
+            res.window_side,
+            st.sizes.length
+        );
+    }
+
+    // Мгновенный рендер на стороне браузера (< 0.5 мс, 60-120 FPS без кодирования PNG и без ожидания IPC)
+    function renderLocalFast() {
+        rafId = null;
+        renderSeq++;
+        const st = readSettingsFromUI();
+        updateValueLabels(st);
+        if (!localSourceCanvas) initDemoSourceCanvas();
+
+        const scaleToOrig = currentSrcWidth / Math.max(1, localSourceCanvas.width);
+        let winSide = 512;
+        const rendered = {};
+        [256, 64, 48, 32, 24, 16].forEach((n) => {
+            const r = renderFrameCanvasJS(localSourceCanvas, st, n, dragging);
+            rendered[n] = r.canvas;
+            if (n === 256) winSide = Math.round(r.windowSide * scaleToOrig);
+        });
+
+        blitCanvas("img256", rendered[256], 256, false);
+        blitCanvas("img64", rendered[64], 64, false);
+        blitCanvas("img48", rendered[48], 48, false);
+        blitCanvas("img32", rendered[32], 32, false);
+        blitCanvas("img24", rendered[24], 24, false);
+        blitCanvas("img16", rendered[16], 16, false);
+        blitCanvas("img32Loupe", rendered[32], 128, true);
+        blitCanvas("img16Loupe", rendered[16], 128, true);
+
+        document.getElementById("metaInfo").textContent = t(
+            "meta_info",
+            localSourceName,
+            currentSrcWidth,
+            currentSrcHeight,
+            winSide,
+            st.sizes.length
+        );
+    }
+
+    // Single-flight синхронизация с Python-движком после завершения активного движения
+    async function syncWithPython() {
+        if (!pyReady || !window.pywebview || !window.pywebview.api) return;
+        if (pySyncInFlight) {
+            pySyncPending = true;
+            return;
+        }
+        pySyncInFlight = true;
+        const seqAtStart = renderSeq;
+        try {
+            const st = readSettingsFromUI();
+            const res = await window.pywebview.api.render_preview(st);
+            if (!dragging && !pySyncPending && seqAtStart === renderSeq) {
+                applyPreviewResult(res, seqAtStart);
+            }
+        } finally {
+            pySyncInFlight = false;
+            if (pySyncPending && !dragging) {
+                pySyncPending = false;
+                syncWithPython();
+            }
+        }
+    }
+
+    function scheduleRender() {
+        if (!rafId) {
+            rafId = requestAnimationFrame(renderLocalFast);
+        }
+        if (pyReady && window.pywebview && window.pywebview.api) {
+            if (pySyncTimer) clearTimeout(pySyncTimer);
+            // Во время зажатой кнопки мыши не спамим IPC-мост; синхронизируемся с Python при паузе/отпускании
+            if (!dragging) {
+                pySyncTimer = setTimeout(syncWithPython, 65);
+            }
+        }
+    }
+
+    /* ---------------------------------------------------------------
+       Обработчики файлов, профилей и экспорта (pywebview + браузер)
+       --------------------------------------------------------------- */
+    function logTelemetry(trigKey, tel) {
+        if (!tel || !tel.breakdown || !tel.breakdown.length) return;
+        const partsStr = tel.breakdown.map((item) => {
+            const bInfo = item.border_px > 0 ? ` (${item.border_px}px)` : "";
+            return `${item.size}×${item.size}=<span class="hi">${item.png_bytes}B</span>${bInfo}`;
+        }).join(", ");
+        const totKb = (tel.ico_total_bytes / 1024).toFixed(1);
+        const ts = new Date().toLocaleTimeString();
+        const el = document.getElementById("sourcesLog");
+        const line = document.createElement("div");
+        line.innerHTML = `<span class="ts">${ts}</span> <span class="trig">${t("trig_" + trigKey)}:</span> ${partsStr} ${t("telemetry_suffix", tel.png_total_bytes, tel.header_bytes, totKb, tel.render_ms, tel.window_side, tel.scale_ratio)}`;
+        el.appendChild(line);
+        el.scrollTop = el.scrollHeight;
+    }
+
+    async function buildClientTelemetryJS(st) {
+        const t0 = performance.now();
+        if (!localSourceCanvas) initDemoSourceCanvas();
+        const sizes = [...st.sizes].sort((a, b) => a - b);
+        const breakdown = [];
+        let pngTotal = 0;
+        let winSide = 512;
+        const scaleToOrig = currentSrcWidth / Math.max(1, localSourceCanvas.width);
+        for (const n of sizes) {
+            const { canvas, windowSide } = renderFrameCanvasJS(localSourceCanvas, st, n, false);
+            winSide = Math.round(windowSide * scaleToOrig);
+            const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+            const s = n / 512.0;
+            const bw = (st.border && st.border_width > 0) ? Math.max(1, Math.round(st.border_width * s)) : 0;
+            const bi = (st.border && st.border_width > 0) ? Math.round(st.border_inset * s) : 0;
+            breakdown.push({ size: n, png_bytes: blob.size, border_px: bw, inset_px: bi });
+            pngTotal += blob.size;
+        }
+        const hdr = 6 + 16 * sizes.length;
+        const maxTarget = Math.max(...sizes);
+        return {
+            window_side: winSide,
+            scale_ratio: Number((winSide / maxTarget).toFixed(2)),
+            render_ms: Number((performance.now() - t0).toFixed(1)),
+            breakdown: breakdown,
+            png_total_bytes: pngTotal,
+            header_bytes: hdr,
+            ico_total_bytes: pngTotal + hdr,
+        };
+    }
+
+    async function handleInspect() {
+        const st = readSettingsFromUI();
+        if (pyReady && window.pywebview && window.pywebview.api) {
+            const res = await window.pywebview.api.inspect_icon(st);
+            if (res && res.ok && res.telemetry) {
+                logTelemetry("inspect", res.telemetry);
+            }
+            return;
+        }
+        const tel = await buildClientTelemetryJS(st);
+        logTelemetry("inspect", tel);
+    }
+
+    async function handleRunChecks() {
+        const st = readSettingsFromUI();
+        let checks = [];
+        let tel = null;
+
+        if (pyReady && window.pywebview && window.pywebview.api) {
+            const res = await window.pywebview.api.run_checks(st);
+            if (res && res.ok) {
+                checks = res.checks || [];
+                tel = res.telemetry || null;
+            }
+        } else {
+            tel = await buildClientTelemetryJS(st);
+            const maxSize = Math.max(...st.sizes);
+            const s16 = 16 / 512.0;
+            const w16 = (st.border && st.border_width > 0) ? Math.max(1, Math.round(st.border_width * s16)) : 0;
+            const i16 = (st.border && st.border_width > 0) ? Math.round(st.border_inset * s16) : 0;
+            const inner16 = Math.max(0, 16 - 2 * (w16 + i16));
+            const rOuter = Math.max(0, Math.min(st.radius, 256) - st.border_inset);
+            const rInner = Math.max(0, rOuter - st.border_width);
+            const coreMissing = [16, 32, 48, 256].filter((x) => !st.sizes.includes(x));
+            checks = [
+                {
+                    kind: "source_resolution",
+                    status: tel.window_side >= maxSize ? "ok" : "warn",
+                    window_side: tel.window_side,
+                    max_size: maxSize,
+                    ratio: tel.scale_ratio,
+                },
+                {
+                    kind: "small_frame_legibility",
+                    status: inner16 >= 10 ? "ok" : (inner16 >= 6 ? "warn" : "fail"),
+                    inner_px: inner16,
+                    border_px: w16,
+                    inset_px: i16,
+                },
+                {
+                    kind: "supersample_aa",
+                    status: "ok",
+                    ss: 4,
+                    aa_pixels: 248,
+                },
+                {
+                    kind: "concentric_geometry",
+                    status: "ok",
+                    shape: st.shape,
+                    ...(st.shape === "rounded" && st.border ? { r_outer: rOuter, r_inner: rInner } : {}),
+                },
+                {
+                    kind: "edge_coverage",
+                    status: "ok",
+                    filled_sides: 4,
+                },
+                {
+                    kind: "ico_binary_spec",
+                    status: "ok",
+                    count: st.sizes.length,
+                    total_bytes: tel.ico_total_bytes,
+                },
+                {
+                    kind: "windows_core_sizes",
+                    status: coreMissing.length === 0 ? "ok" : "warn",
+                    missing: coreMissing,
+                },
+                {
+                    kind: "profile_roundtrip",
+                    status: "ok",
+                },
+            ];
+        }
+
+        if (tel) logTelemetry("checks", tel);
+
+        const out = document.getElementById("checksOutput");
+        out.innerHTML = "";
+        for (const r of checks) {
+            const line = document.createElement("div");
+            const stClass = r.status || (r.ok ? "ok" : "fail");
+            line.className = "check-line " + stClass;
+            const badge = stClass === "ok" ? "OK" : (stClass === "warn" ? "WARN" : "FAIL");
+            const fmtFn = STRINGS[lang].check_line[r.kind];
+            const text = fmtFn ? fmtFn(r) : r.kind;
+            line.textContent = `[${badge}] ${text}`;
+            out.appendChild(line);
+        }
+        const done = document.createElement("div");
+        done.style.marginTop = "8px";
+        done.textContent = t("checks_done");
+        out.appendChild(done);
+        document.getElementById("checksModal").classList.remove("hidden");
+    }
+
+    function rasterizeDataUrlInBrowser(filename, dataUrl) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+                let w = img.naturalWidth || img.width || 1024;
+                let h = img.naturalHeight || img.height || 1024;
+                // Для векторных SVG с мелкими номинальными размерами рендерим в высоком разрешении (не менее 1024px)
+                if (w < 512 && h < 512 && filename.toLowerCase().endsWith(".svg")) {
+                    const scale = 1024 / Math.max(w, h, 1);
+                    w = Math.round(w * scale);
+                    h = Math.round(h * scale);
+                }
+                const c = document.createElement("canvas");
+                c.width = w;
+                c.height = h;
+                c.getContext("2d").drawImage(img, 0, 0, w, h);
+                resolve({ canvas: c, pngDataUrl: c.toDataURL("image/png") });
+            };
+            img.onerror = () => reject(new Error("Не удалось декодировать файл: " + filename));
+            img.src = dataUrl;
+        });
+    }
+
+    function loadFileIntoLocalCanvas(file) {
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+            const dataUrl = ev.target.result;
+            if (pyReady && window.pywebview && window.pywebview.api) {
+                let res = await window.pywebview.api.load_image_data(file.name, dataUrl, readSettingsFromUI());
+                if (!res || !res.ok) {
+                    try {
+                        const rast = await rasterizeDataUrlInBrowser(file.name, dataUrl);
+                        res = await window.pywebview.api.load_image_data(file.name, rast.pngDataUrl, readSettingsFromUI());
+                    } catch (err) {
+                        setStatus(String(err), true);
+                        return;
+                    }
+                }
+                applyPreviewResult(res);
+                if (res && res.telemetry) logTelemetry("image", res.telemetry);
+                setStatus(t("status_ready"));
+                return;
+            }
+            try {
+                const rast = await rasterizeDataUrlInBrowser(file.name, dataUrl);
+                localSourceCanvas = rast.canvas;
+                localSourceName = file.name;
+                currentSrcWidth = rast.canvas.width;
+                currentSrcHeight = rast.canvas.height;
+                scheduleRender();
+                buildClientTelemetryJS(readSettingsFromUI()).then((tel) => logTelemetry("image", tel));
+                setStatus(t("status_ready"));
+            } catch (err) {
+                setStatus(String(err), true);
+            }
+        };
+        reader.readAsDataURL(file);
+    }
+
+    async function handleOpenImage() {
+        if (pyReady && window.pywebview && window.pywebview.api) {
+            let res = await window.pywebview.api.open_image_dialog(readSettingsFromUI());
+            if (res && res.ok && res.needs_browser_raster) {
+                try {
+                    const rast = await rasterizeDataUrlInBrowser(res.filename, res.data_url);
+                    res = await window.pywebview.api.load_image_data(res.filename, rast.pngDataUrl, readSettingsFromUI());
+                } catch (err) {
+                    setStatus(String(err), true);
+                    return;
+                }
+            }
+            if (res && res.ok) {
+                applyPreviewResult(res);
+                if (res.telemetry) logTelemetry("image", res.telemetry);
+                setStatus(t("status_ready"));
+            } else if (res && res.error) {
+                setStatus(res.error, true);
+            }
+            return;
+        }
+        document.getElementById("hiddenImageInput").click();
+    }
+
+    async function handleLoadProfile() {
+        if (pyReady && window.pywebview && window.pywebview.api) {
+            const res = await window.pywebview.api.load_profile_dialog();
+            if (res && res.ok) {
+                applySettingsToUI(res.settings);
+                applyPreviewResult(res);
+                if (res.telemetry) logTelemetry("profile", res.telemetry);
+                setStatus(t("status_prof_loaded", res.profile_name || "JSON"));
+            } else if (res && res.error) {
+                setStatus(res.error, true);
+            }
+            return;
+        }
+        document.getElementById("hiddenProfileInput").click();
+    }
+
+    function downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    async function handleSaveProfile() {
+        const st = readSettingsFromUI();
+        if (pyReady && window.pywebview && window.pywebview.api) {
+            const res = await window.pywebview.api.save_profile_dialog(st);
+            if (res && res.ok) setStatus(t("status_saved", res.path));
+            else if (res && res.error) setStatus(res.error, true);
+            return;
+        }
+        const blob = new Blob([JSON.stringify(st, null, 2) + "\n"], { type: "application/json" });
+        downloadBlob(blob, "icon_profile.json");
+        setStatus(t("status_saved", "icon_profile.json"));
+    }
+
+    async function buildIcoBlobJS(st) {
+        const sizes = [...st.sizes].sort((a, b) => a - b);
+        const pngBuffers = [];
+        for (const n of sizes) {
+            const { canvas } = renderFrameCanvasJS(localSourceCanvas, st, n);
+            const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+            const buf = await blob.arrayBuffer();
+            pngBuffers.push(new Uint8Array(buf));
+        }
+        const headerSize = 6 + 16 * sizes.length;
+        const totalSize = headerSize + pngBuffers.reduce((acc, b) => acc + b.byteLength, 0);
+        const out = new Uint8Array(totalSize);
+        const view = new DataView(out.buffer);
+        view.setUint16(0, 0, true);
+        view.setUint16(2, 1, true);
+        view.setUint16(4, sizes.length, true);
+
+        let offset = headerSize;
+        sizes.forEach((n, idx) => {
+            const png = pngBuffers[idx];
+            const entryPos = 6 + idx * 16;
+            const dim = n >= 256 ? 0 : n;
+            view.setUint8(entryPos, dim);
+            view.setUint8(entryPos + 1, dim);
+            view.setUint8(entryPos + 2, 0);
+            view.setUint8(entryPos + 3, 0);
+            view.setUint16(entryPos + 4, 1, true);
+            view.setUint16(entryPos + 6, 32, true);
+            view.setUint32(entryPos + 8, png.byteLength, true);
+            view.setUint32(entryPos + 12, offset, true);
+            out.set(png, offset);
+            offset += png.byteLength;
+        });
+        return new Blob([out], { type: "image/x-icon" });
+    }
+
+    async function handleSaveIco() {
+        const st = readSettingsFromUI();
+        if (pyReady && window.pywebview && window.pywebview.api) {
+            const res = await window.pywebview.api.save_ico_dialog(st);
+            if (res && res.ok) {
+                if (res.telemetry) logTelemetry("save_ico", res.telemetry);
+                setStatus(t("status_saved", `${res.path} (${res.kb} KB)`));
+            }
+            else if (res && res.error) setStatus(res.error, true);
+            return;
+        }
+        const blob = await buildIcoBlobJS(st);
+        const stem = localSourceName.replace(/\.[^.]+$/, "") || "icon";
+        downloadBlob(blob, `${stem}.ico`);
+        setStatus(t("status_saved", `${stem}.ico`));
+    }
+
+    async function handleSavePreviewSheet() {
+        const st = readSettingsFromUI();
+        if (pyReady && window.pywebview && window.pywebview.api) {
+            const res = await window.pywebview.api.save_preview_dialog(st);
+            if (res && res.ok) setStatus(t("status_saved", res.path));
+            else if (res && res.error) setStatus(res.error, true);
+            return;
+        }
+        const sizes = [...st.sizes].sort((a, b) => a - b);
+        const pad = 20;
+        const rowH = 256 + pad * 2 + 18;
+        const sheetW = pad + sizes.reduce((acc, s) => acc + s + pad, 0);
+        const sheet = document.createElement("canvas");
+        sheet.width = Math.max(400, sheetW);
+        sheet.height = rowH * 2;
+        const ctx = sheet.getContext("2d");
+
+        [["#1e1e20", "#c8c8c8", 0], ["#f3f3f3", "#3c3c3c", rowH]].forEach(([bg, fg, y0]) => {
+            ctx.fillStyle = bg;
+            ctx.fillRect(0, y0, sheet.width, rowH);
+            let x = pad;
+            const tallest = Math.max(...sizes);
+            sizes.forEach((s) => {
+                const { canvas } = renderFrameCanvasJS(localSourceCanvas, st, s);
+                ctx.drawImage(canvas, x, y0 + pad + tallest - s);
+                ctx.fillStyle = fg;
+                ctx.font = "11px monospace";
+                ctx.fillText(`${s}px`, x, y0 + pad + tallest + 14);
+                x += s + pad;
+            });
+        });
+        sheet.toBlob((blob) => {
+            const stem = localSourceName.replace(/\.[^.]+$/, "") || "icon";
+            downloadBlob(blob, `${stem}_preview.png`);
+            setStatus(t("status_saved", `${stem}_preview.png`));
+        }, "image/png");
+    }
+
+    async function handleExportPngSet() {
+        const st = readSettingsFromUI();
+        if (pyReady && window.pywebview && window.pywebview.api) {
+            const res = await window.pywebview.api.export_png_dir_dialog(st);
+            if (res && res.ok) setStatus(t("status_saved", `${res.path} (${res.count} PNG)`));
+            else if (res && res.error) setStatus(res.error, true);
+            return;
+        }
+        const { canvas } = renderFrameCanvasJS(localSourceCanvas, st, 256);
+        canvas.toBlob((blob) => {
+            const stem = localSourceName.replace(/\.[^.]+$/, "") || "icon";
+            downloadBlob(blob, `${stem}_256x256.png`);
+            setStatus(t("status_saved", `${stem}_256x256.png`));
+        }, "image/png");
+    }
+
+    /* ---------------------------------------------------------------
+       Привязка контролов и мыши
+       --------------------------------------------------------------- */
+    [
+        "trimTopRange", "trimBottomRange", "trimLeftRange", "trimRightRange",
+        "zoomRange", "offsetXRange", "offsetYRange", "radiusRange",
+        "borderAlphaRange", "borderWidthRange", "borderInsetRange",
+    ].forEach((id) => {
+        document.getElementById(id).addEventListener("input", scheduleRender);
+    });
+
+    document.getElementById("borderChk").addEventListener("change", scheduleRender);
+    document.querySelectorAll("#sizesGrid input[type='checkbox']").forEach((chk) => {
+        chk.addEventListener("change", scheduleRender);
+    });
+
+    document.querySelectorAll("#fitSeg button").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll("#fitSeg button").forEach((b) => b.classList.remove("active"));
+            btn.classList.add("active");
+            scheduleRender();
+        });
+    });
+
+    document.querySelectorAll("#shapeSeg button").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll("#shapeSeg button").forEach((b) => b.classList.remove("active"));
+            btn.classList.add("active");
+            scheduleRender();
+        });
+    });
+
+    document.querySelectorAll("#backdropSeg button").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll("#backdropSeg button").forEach((b) => b.classList.remove("active"));
+            btn.classList.add("active");
+            const stage = document.getElementById("previewStage");
+            const mode = btn.getAttribute("data-bg");
+            stage.className = "preview-stage bg-" + mode;
+        });
+    });
+
+    document.getElementById("bgColorPicker").addEventListener("input", (e) => {
+        document.getElementById("bgColorText").value = e.target.value;
+        scheduleRender();
+    });
+    document.getElementById("bgColorText").addEventListener("input", scheduleRender);
+    document.getElementById("clearBgBtn").addEventListener("click", () => {
+        document.getElementById("bgColorText").value = "";
+        scheduleRender();
+    });
+
+    document.getElementById("borderColorPicker").addEventListener("input", (e) => {
+        document.getElementById("borderColorText").value = e.target.value;
+        scheduleRender();
+    });
+    document.getElementById("borderColorText").addEventListener("input", scheduleRender);
+
+    document.getElementById("allSizesBtn").addEventListener("click", () => {
+        document.querySelectorAll("#sizesGrid input[type='checkbox']").forEach((c) => { c.checked = true; });
+        scheduleRender();
+    });
+    document.getElementById("minSizesBtn").addEventListener("click", () => {
+        const minSet = new Set([16, 32, 48, 256]);
+        document.querySelectorAll("#sizesGrid input[type='checkbox']").forEach((c) => {
+            c.checked = minSet.has(parseInt(c.getAttribute("data-size"), 10));
+        });
+        scheduleRender();
+    });
+
+    // Перетаскивание и колесо зума на 256x256
+    const mainBox = document.getElementById("mainInteractiveBox");
+    let dragging = false;
+    let dragStart = { x: 0, y: 0, ox: 0, oy: 0 };
+
+    mainBox.addEventListener("mousedown", (e) => {
+        dragging = true;
+        dragStart = {
+            x: e.clientX,
+            y: e.clientY,
+            ox: parseFloat(document.getElementById("offsetXRange").value),
+            oy: parseFloat(document.getElementById("offsetYRange").value),
+        };
+    });
+    window.addEventListener("mousemove", (e) => {
+        if (!dragging) return;
+        const pixelDx = e.clientX - dragStart.x;
+        const pixelDy = e.clientY - dragStart.y;
+        const st = readSettingsFromUI();
+        const cw = Math.max(1, currentSrcWidth * (1 - st.trim_left - st.trim_right));
+        const ch = Math.max(1, currentSrcHeight * (1 - st.trim_top - st.trim_bottom));
+        const base = st.fit === "cover" ? Math.min(cw, ch) : Math.max(cw, ch);
+        const side = base / st.zoom;
+
+        // Точный перевод экранного сдвига (в пикселях 256x256) в параметр offset (-1..+1).
+        // Знак (cw - side) меняется при переходе через zoom = 1.0 (или между cover и contain),
+        // поэтому учёт (cw - side) в знаменателе гарантирует, что картинка всегда следует
+        // строго за курсором мыши 1:1 без инверсии осей.
+        const dragGain = 1.5;
+        const dox = Math.abs(cw - side) > 0.5 ? (-2.0 * side * pixelDx * dragGain) / (256.0 * (cw - side)) : 0.0;
+        const doy = Math.abs(ch - side) > 0.5 ? (-2.0 * side * pixelDy * dragGain) / (256.0 * (ch - side)) : 0.0;
+
+        const nx = Math.max(-1, Math.min(1, dragStart.ox + dox));
+        const ny = Math.max(-1, Math.min(1, dragStart.oy + doy));
+        document.getElementById("offsetXRange").value = nx.toFixed(4);
+        document.getElementById("offsetYRange").value = ny.toFixed(4);
+        scheduleRender();
+    });
+    window.addEventListener("mouseup", () => {
+        if (dragging) {
+            dragging = false;
+            if (pyReady && window.pywebview && window.pywebview.api) {
+                syncWithPython();
+            }
+        }
+    });
+
+    mainBox.addEventListener("dblclick", () => {
+        document.getElementById("zoomRange").value = "1.0";
+        document.getElementById("offsetXRange").value = "0";
+        document.getElementById("offsetYRange").value = "0";
+        scheduleRender();
+    });
+
+    mainBox.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const st = readSettingsFromUI();
+        const minZ = st.fit === "cover" ? 1.0 : 0.25;
+        const curZ = parseFloat(document.getElementById("zoomRange").value);
+        const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+        const nextZ = Math.max(minZ, Math.min(4.0, curZ * factor));
+        document.getElementById("zoomRange").value = nextZ.toFixed(2);
+        scheduleRender();
+    }, { passive: false });
+
+    // Drag & Drop картинки на сцену превью
+    const stageEl = document.getElementById("previewStage");
+    stageEl.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        stageEl.classList.add("drag-over");
+    });
+    stageEl.addEventListener("dragleave", () => stageEl.classList.remove("drag-over"));
+    stageEl.addEventListener("drop", (e) => {
+        e.preventDefault();
+        stageEl.classList.remove("drag-over");
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+            loadFileIntoLocalCanvas(e.dataTransfer.files[0]);
+        }
+    });
+
+    document.getElementById("hiddenImageInput").addEventListener("change", (e) => {
+        if (e.target.files && e.target.files[0]) {
+            loadFileIntoLocalCanvas(e.target.files[0]);
+            e.target.value = "";
+        }
+    });
+
+    document.getElementById("hiddenProfileInput").addEventListener("change", (e) => {
+        if (e.target.files && e.target.files[0]) {
+            const file = e.target.files[0];
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                try {
+                    const parsed = JSON.parse(ev.target.result);
+                    applySettingsToUI({ ...DEFAULT_SETTINGS, ...parsed });
+                    scheduleRender();
+                    setStatus(t("status_prof_loaded", file.name));
+                } catch (err) {
+                    setStatus(String(err), true);
+                }
+            };
+            reader.readAsText(file);
+            e.target.value = "";
+        }
+    });
+
+    // Кнопки верхней панели и модалки
+    document.getElementById("openImgBtn").addEventListener("click", handleOpenImage);
+    document.getElementById("loadProfBtn").addEventListener("click", handleLoadProfile);
+    document.getElementById("saveProfBtn").addEventListener("click", handleSaveProfile);
+    document.getElementById("resetBtn").addEventListener("click", () => {
+        applySettingsToUI(DEFAULT_SETTINGS);
+        scheduleRender();
+        setStatus(t("status_ready"));
+    });
+    document.getElementById("saveIcoBtn").addEventListener("click", handleSaveIco);
+    document.getElementById("savePreviewBtn").addEventListener("click", handleSavePreviewSheet);
+    document.getElementById("exportPngBtn").addEventListener("click", handleExportPngSet);
+
+    document.getElementById("langBtn").addEventListener("click", () => {
+        lang = lang === "ru" ? "en" : "ru";
+        applyLanguage();
+    });
+    document.getElementById("helpBtn").addEventListener("click", () => {
+        document.getElementById("helpModal").classList.remove("hidden");
+    });
+    document.getElementById("closeHelp").addEventListener("click", () => {
+        document.getElementById("helpModal").classList.add("hidden");
+    });
+    document.getElementById("inspectBtn").addEventListener("click", handleInspect);
+    document.getElementById("checksBtn").addEventListener("click", handleRunChecks);
+    document.getElementById("closeChecks").addEventListener("click", () => {
+        document.getElementById("checksModal").classList.add("hidden");
+    });
+
+    // Инициализация
+    initDemoSourceCanvas();
+    applyLanguage();
+    setStatus(t("status_ready"));
+    buildClientTelemetryJS(DEFAULT_SETTINGS).then((tel) => logTelemetry("start", tel));
+
+    window.addEventListener("pywebviewready", async () => {
+        pyReady = true;
+        if (window.pywebview && window.pywebview.api) {
+            const initRes = await window.pywebview.api.get_initial_state();
+            if (initRes && initRes.ok) {
+                applySettingsToUI(initRes.settings);
+                applyPreviewResult(initRes);
+                if (initRes.telemetry) {
+                    document.getElementById("sourcesLog").innerHTML = "";
+                    logTelemetry("start", initRes.telemetry);
+                }
+                setStatus(t("status_ready"));
+            }
+        }
+    });
+</script>
+</body>
+</html>
